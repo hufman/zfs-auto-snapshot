@@ -367,16 +367,40 @@ fi
 ZPOOL_STATUS=$(env LC_ALL=C zpool status 2>&1 ) \
   || { print_log error "zpool status $?: $ZPOOL_STATUS"; exit 135; }
 
-ZFS_LIST=$(env LC_ALL=C zfs list -H -t filesystem,volume -s name \
-  -o name,com.sun:auto-snapshot,com.sun:auto-snapshot:"$opt_label") \
+# Get a list of pools that are being scrubbed.
+ZPOOLS_SCRUBBING=$(echo "$ZPOOL_STATUS" | awk -F ': ' \
+  '$1 ~ /^ *pool$/ { pool = $2 } ; \
+   $1 ~ /^ *scan$/ && $2 ~ /scrub in progress/ { print pool }' \
+  | sort)
+
+# Get a list of pools that cannot do a snapshot.
+ZPOOLS_NOTREADY=$(echo "$ZPOOL_STATUS" | awk -F ': ' \
+  '$1 ~ /^ *pool$/ { pool = $2 } ; \
+   $1 ~ /^ *state$/ && $2 !~ /ONLINE|DEGRADED/ { print pool } ' \
+  | sort)
+
+# add spun-down drives
+ZPOOLS_IDLE=$(echo "$ZPOOL_STATUS" | awk -F ': ' \
+  '$1 ~ /^ *pool$/ { print $2 } ; ' \
+  | while read pool; do /usr/local/sbin/zfs-pool-notidle "$pool" || echo "$pool"; done)
+ZPOOLS_NOTREADY=$(echo -e "$ZPOOLS_NOTREADY\n$ZPOOLS_IDLE")
+ZPOOLS_READY=$(echo "$ZPOOL_STATUS" | awk -F ': ' \
+  '$1 ~ /^ *pool$/ { print $2 } ; ' \
+  | while read pool; do echo "$ZPOOLS_NOTREADY" | grep -F "$pool" > /dev/null || echo "$pool"; done)
+
+ZFS_LIST=$(env LC_ALL=C echo "$ZPOOLS_READY" | while read pool; do
+  zfs list -r "$pool" -H -t filesystem,volume -s name \
+  -o name,com.sun:auto-snapshot,com.sun:auto-snapshot:"$opt_label"; done) \
   || { print_log error "zfs list $?: $ZFS_LIST"; exit 136; }
 
 if [ -n "$opt_fast_zfs_list" ]
 then
-	SNAPSHOTS_OLD=$(env LC_ALL=C zfs list -H -t snapshot -o name -s name|grep $opt_prefix |awk '{ print substr( $0, length($0) - 14, length($0) ) " " $0}' |sort -r -k1,1 -k2,2|awk '{ print substr( $0, 17, length($0) )}') \
+	SNAPSHOTS_OLD=$(env LC_ALL=C echo "$ZPOOLS_READY" | while read pool; do
+          zfs list -r "$pool" -H -t snapshot -o name -s name|grep $opt_prefix |awk '{ print substr( $0, length($0) - 14, length($0) ) " " $0}' |sort -r -k1,1 -k2,2|awk '{ print substr( $0, 17, length($0) )}'; done) \
 	  || { print_log error "zfs list $?: $SNAPSHOTS_OLD"; exit 137; }
 else
-	SNAPSHOTS_OLD=$(env LC_ALL=C zfs list -H -t snapshot -S creation -o name) \
+	SNAPSHOTS_OLD=$(env LC_ALL=C echo "$ZPOOLS_READY" | while read pool; do
+          zfs list -r "$pool" -H -t snapshot -S creation -o name; done) \
 	  || { print_log error "zfs list $?: $SNAPSHOTS_OLD"; exit 137; }
 fi
 
@@ -393,18 +417,6 @@ do
 	print_log error "$ii is not a ZFS filesystem or volume."
 	exit 138
 done
-
-# Get a list of pools that are being scrubbed.
-ZPOOLS_SCRUBBING=$(echo "$ZPOOL_STATUS" | awk -F ': ' \
-  '$1 ~ /^ *pool$/ { pool = $2 } ; \
-   $1 ~ /^ *scan$/ && $2 ~ /scrub in progress/ { print pool }' \
-  | sort ) 
-
-# Get a list of pools that cannot do a snapshot.
-ZPOOLS_NOTREADY=$(echo "$ZPOOL_STATUS" | awk -F ': ' \
-  '$1 ~ /^ *pool$/ { pool = $2 } ; \
-   $1 ~ /^ *state$/ && $2 !~ /ONLINE|DEGRADED/ { print pool } ' \
-  | sort)
 
 # Get a list of datasets for which snapshots are explicitly disabled.
 NOAUTO=$(echo "$ZFS_LIST" | awk -F '\t' \
