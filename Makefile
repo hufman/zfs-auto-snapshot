@@ -17,3 +17,4 @@ install:
 	install src/zfs-auto-snapshot.8 $(DESTDIR)$(PREFIX)/share/man/man8/zfs-auto-snapshot.8
 	install -d $(DESTDIR)$(PREFIX)/sbin
 	install src/zfs-auto-snapshot.sh $(DESTDIR)$(PREFIX)/sbin/zfs-auto-snapshot
+	install src/zfs-pool-notidle.sh $(DESTDIR)$(PREFIX)/sbin/zfs-pool-notidle
